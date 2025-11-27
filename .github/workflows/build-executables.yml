@@ -1,0 +1,84 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install streamlit plotly pandas numpy pyarrow altair pyinstaller pydeck packaging cachetools toml validators watchdog pillow
+
+      - name: Build Windows executable
+        run: pyinstaller ShareBuybackApp.spec --clean
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShareBuybackStrategy-Windows
+          path: dist/ShareBuybackStrategy2.exe
+          retention-days: 30
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install streamlit plotly pandas numpy pyarrow altair pyinstaller pydeck packaging cachetools toml validators watchdog pillow
+
+      - name: Build Mac executable
+        run: pyinstaller ShareBuybackApp_mac.spec --clean
+
+      - name: Zip Mac app bundle
+        run: |
+          cd dist
+          zip -r ShareBuybackStrategy-Mac.zip ShareBuybackStrategy.app
+
+      - name: Upload Mac artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShareBuybackStrategy-Mac
+          path: dist/ShareBuybackStrategy-Mac.zip
+          retention-days: 30
+
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ShareBuybackStrategy-Windows/ShareBuybackStrategy2.exe
+            ShareBuybackStrategy-Mac/ShareBuybackStrategy-Mac.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
