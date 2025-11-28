@@ -1,10 +1,12 @@
 """
 Trading strategies for fixed-notional share buyback execution.
 
-Three strategies are implemented:
+Five strategies are implemented:
 1. Strategy 1: Simple uniform execution over target duration
 2. Strategy 2: Adaptive execution with flexible end time (no discount)
 3. Strategy 3: Adaptive execution with discounted benchmark
+4. Strategy 4: Multi-factor convex adaptive (D+E+F combined)
+5. Strategy 5: Flexible completion adaptive (optional partial completion)
 """
 
 import numpy as np
@@ -13,7 +15,20 @@ from .config import (
     INITIAL_PERIOD_DAYS,
     MAX_SPEEDUP_MULTIPLIER,
     EXTRA_SLOW_MULTIPLIER,
-    EXTRA_SLOW_THRESHOLD_DAYS
+    EXTRA_SLOW_THRESHOLD_DAYS,
+    S4_BETA,
+    S4_GAMMA,
+    S4_Z_WINDOW,
+    S4_Z_THRESHOLD,
+    S4_MAX_MULTIPLIER,
+    S4_MIN_MULTIPLIER,
+    S4_SIGNAL_BOOST,
+    S5_MIN_COMPLETION_PCT,
+    S5_UNFAVORABLE_THRESHOLD,
+    S5_BETA,
+    S5_GAMMA,
+    S5_MAX_MULTIPLIER,
+    S5_MIN_MULTIPLIER
 )
 
 
@@ -260,6 +275,279 @@ def strategy_3(
         target_duration=target_duration,
         discount_bps=discount_bps
     )
+
+
+def strategy_4(
+    prices: np.ndarray,
+    total_usd: float,
+    min_duration: int,
+    max_duration: int,
+    target_duration: int,
+    beta: float = S4_BETA,
+    gamma: float = S4_GAMMA,
+    z_window: int = S4_Z_WINDOW,
+    z_threshold: float = S4_Z_THRESHOLD
+) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    """
+    Strategy 4: Multi-Factor Convex Adaptive Execution.
+
+    Combines three components:
+    - D (Convex): Exponential response to price deviations from benchmark
+    - E (Time-Urgency): Quadratic urgency factor as deadline approaches
+    - F (Z-Score): Statistical filter to ignore noise
+
+    Parameters
+    ----------
+    prices : np.ndarray
+        1D array of stock prices for each trading day.
+    total_usd : float
+        Total USD amount to execute.
+    min_duration : int
+        Minimum number of days for execution.
+    max_duration : int
+        Maximum number of days for execution.
+    target_duration : int
+        Target number of days (used to set base daily amount).
+    beta : float
+        Convex sensitivity parameter (default: 20).
+    gamma : float
+        Urgency acceleration parameter (default: 3).
+    z_window : int
+        Rolling window for z-score calculation (default: 20 days).
+    z_threshold : float
+        Z-score threshold for statistical significance (default: 1.0).
+
+    Returns
+    -------
+    tuple
+        - usd_per_day : np.ndarray - USD executed each day
+        - shares_per_day : np.ndarray - Shares bought each day
+        - total_shares : float - Total shares acquired
+        - end_day : int - Day on which execution completed
+    """
+    n_days = len(prices)
+    base_daily_usd = total_usd / target_duration
+
+    usd_per_day = np.zeros(n_days)
+    shares_per_day = np.zeros(n_days)
+    remaining_usd = total_usd
+
+    end_day = 0
+
+    for day in range(n_days):
+        if remaining_usd <= 0.01:
+            break
+
+        current_price = prices[day]
+
+        # Compute expanding window benchmark
+        benchmark = np.mean(prices[:day + 1])
+
+        # Component D: Convex scaling (exponential)
+        deviation = (benchmark - current_price) / benchmark
+        convex_mult = np.exp(beta * deviation)
+        convex_mult = np.clip(convex_mult, S4_MIN_MULTIPLIER, S4_MAX_MULTIPLIER)
+
+        # Component E: Time-urgency factor (quadratic)
+        time_pct = day / max_duration if max_duration > 0 else 1.0
+        urgency = 1.0 + gamma * (time_pct ** 2)
+
+        # Component F: Z-score filter
+        z_score = 0.0
+        if day >= z_window:
+            roll_prices = prices[day - z_window:day]
+            roll_mean = np.mean(roll_prices)
+            roll_std = np.std(roll_prices)
+            if roll_std > 0:
+                z_score = (roll_mean - current_price) / roll_std
+
+        # Combine factors
+        if abs(z_score) > z_threshold:
+            # Statistically significant - full response
+            signal_boost = 1.0 + S4_SIGNAL_BOOST * abs(z_score)
+            final_mult = convex_mult * urgency * signal_boost
+        else:
+            # Noise - conservative response (just time pressure)
+            final_mult = urgency
+
+        # Apply bounds
+        final_mult = np.clip(final_mult, S4_MIN_MULTIPLIER, S4_MAX_MULTIPLIER)
+
+        # Calculate target execution
+        target_usd = base_daily_usd * final_mult
+
+        # Apply duration constraints
+        days_to_min = max(0, min_duration - day - 1)
+        days_to_max = max(1, max_duration - day)
+
+        # Must execute at least this to finish by max_duration
+        min_required = remaining_usd / days_to_max
+
+        # Cannot execute more than this to respect min_duration
+        if days_to_min > 0:
+            max_allowed = remaining_usd / days_to_min
+        else:
+            max_allowed = remaining_usd
+
+        # Constrain execution within bounds
+        today_usd = np.clip(target_usd, min_required, max_allowed)
+        today_usd = min(today_usd, remaining_usd)
+
+        # Execute
+        usd_per_day[day] = today_usd
+        shares_per_day[day] = today_usd / current_price
+        remaining_usd -= today_usd
+        end_day = day + 1
+
+    total_shares = np.sum(shares_per_day)
+
+    return usd_per_day, shares_per_day, total_shares, end_day
+
+
+def strategy_5(
+    prices: np.ndarray,
+    total_usd: float,
+    min_duration: int,
+    max_duration: int,
+    target_duration: int,
+    min_completion_pct: float = S5_MIN_COMPLETION_PCT,
+    unfavorable_threshold: float = S5_UNFAVORABLE_THRESHOLD,
+    beta: float = S5_BETA,
+    gamma: float = S5_GAMMA
+) -> Tuple[np.ndarray, np.ndarray, float, int, float]:
+    """
+    Strategy 5: Flexible Completion Adaptive Execution.
+
+    Similar to Strategy 4 (convex scaling + time urgency), but allows
+    partial completion when prices are unfavorable at deadline.
+
+    Key difference: At deadline, if minimum completion % is met AND
+    price is significantly above benchmark, the strategy stops buying
+    rather than forcing completion at bad prices.
+
+    Parameters
+    ----------
+    prices : np.ndarray
+        1D array of stock prices for each trading day.
+    total_usd : float
+        Total USD amount to execute.
+    min_duration : int
+        Minimum number of days for execution.
+    max_duration : int
+        Maximum number of days for execution.
+    target_duration : int
+        Target number of days (used to set base daily amount).
+    min_completion_pct : float
+        Minimum completion percentage required (85-100). Default: 95.
+    unfavorable_threshold : float
+        Price deviation threshold below which forced completion is skipped.
+        Negative value means price above benchmark. Default: -0.01 (-1%).
+    beta : float
+        Convex sensitivity parameter (default: 50).
+    gamma : float
+        Urgency acceleration parameter (default: 1).
+
+    Returns
+    -------
+    tuple
+        - usd_per_day : np.ndarray - USD executed each day
+        - shares_per_day : np.ndarray - Shares bought each day
+        - total_shares : float - Total shares acquired
+        - end_day : int - Day on which execution completed
+        - completion_pct : float - Actual completion percentage (0-100)
+    """
+    n_days = len(prices)
+    base_daily_usd = total_usd / target_duration
+    min_usd = total_usd * (min_completion_pct / 100.0)
+
+    usd_per_day = np.zeros(n_days)
+    shares_per_day = np.zeros(n_days)
+    remaining_usd = total_usd
+    executed_usd = 0.0
+
+    end_day = 0
+
+    for day in range(min(n_days, max_duration)):
+        if remaining_usd <= 0.01:
+            break
+
+        current_price = prices[day]
+
+        # Compute expanding window benchmark
+        benchmark = np.mean(prices[:day + 1])
+
+        # Component D: Convex scaling (exponential)
+        deviation = (benchmark - current_price) / benchmark
+        convex_mult = np.exp(beta * deviation)
+        convex_mult = np.clip(convex_mult, S5_MIN_MULTIPLIER, S5_MAX_MULTIPLIER)
+
+        # Component E: Time-urgency factor (quadratic)
+        time_pct = day / max_duration if max_duration > 0 else 1.0
+        urgency = 1.0 + gamma * (time_pct ** 2)
+
+        # Combine factors
+        final_mult = convex_mult * urgency
+
+        # Apply bounds
+        final_mult = np.clip(final_mult, S5_MIN_MULTIPLIER, S5_MAX_MULTIPLIER)
+
+        # Calculate target execution
+        target_usd = base_daily_usd * final_mult
+
+        # Apply duration constraints
+        days_to_min = max(0, min_duration - day - 1)
+        days_to_max = max(1, max_duration - day)
+
+        # Must execute at least this to finish by max_duration
+        # But only if we haven't hit minimum completion yet
+        if executed_usd < min_usd:
+            min_required = remaining_usd / days_to_max
+        else:
+            # Minimum met - no forced execution required
+            min_required = 0.0
+
+        # Cannot execute more than this to respect min_duration
+        if days_to_min > 0:
+            max_allowed = remaining_usd / days_to_min
+        else:
+            max_allowed = remaining_usd
+
+        # Constrain execution within bounds
+        today_usd = np.clip(target_usd, min_required, max_allowed)
+        today_usd = min(today_usd, remaining_usd)
+
+        # Execute
+        usd_per_day[day] = today_usd
+        shares_per_day[day] = today_usd / current_price
+        remaining_usd -= today_usd
+        executed_usd += today_usd
+        end_day = day + 1
+
+    # At deadline: decide whether to force-complete remaining
+    if remaining_usd > 0.01 and end_day < n_days:
+        final_day = end_day - 1 if end_day > 0 else 0
+        final_price = prices[final_day]
+        final_benchmark = np.mean(prices[:final_day + 1])
+        final_deviation = (final_benchmark - final_price) / final_benchmark
+
+        hit_minimum = executed_usd >= min_usd
+        price_unfavorable = final_deviation < unfavorable_threshold
+
+        if hit_minimum and price_unfavorable:
+            # Accept partial completion - don't buy more
+            pass
+        else:
+            # Force complete at last day
+            final_exec_day = min(end_day, n_days - 1)
+            usd_per_day[final_exec_day] += remaining_usd
+            shares_per_day[final_exec_day] += remaining_usd / prices[final_exec_day]
+            executed_usd += remaining_usd
+            remaining_usd = 0
+
+    total_shares = np.sum(shares_per_day)
+    completion_pct = (executed_usd / total_usd) * 100.0
+
+    return usd_per_day, shares_per_day, total_shares, end_day, completion_pct
 
 
 def compute_execution_vwap_series(

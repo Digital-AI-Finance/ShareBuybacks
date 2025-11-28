@@ -13,12 +13,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from modules.strategies import strategy_1, strategy_2, strategy_3
+from modules.strategies import strategy_1, strategy_2, strategy_3, strategy_4
 from modules.strategies_vectorized import (
     precompute_benchmarks,
     strategy_1_vectorized,
     strategy_2_vectorized,
     strategy_3_vectorized,
+    strategy_4_vectorized,
     run_all_strategies_vectorized
 )
 from modules.metrics import execution_performance_bps
@@ -180,6 +181,103 @@ class TestStrategy3Vectorized:
         # With discount, benchmark is lower, so prices appear MORE favorable
         # This should lead to generally faster execution
         assert not np.array_equal(dur2, dur3), "Strategy 2 and 3 should differ"
+
+
+class TestStrategy4Vectorized:
+    """Tests for vectorized Strategy 4."""
+
+    def test_strategy4_matches_original(self):
+        """Verify vectorized Strategy 4 matches original implementation."""
+        np.random.seed(42)
+        prices_2d = np.random.rand(50, 100) * 50 + 75  # 75-125 range
+        benchmarks = precompute_benchmarks(prices_2d)
+        total_usd = 1_000_000
+
+        # Vectorized
+        perf_vec, dur_vec, vwap_vec, bench_vec = strategy_4_vectorized(
+            prices_2d, benchmarks, total_usd,
+            min_duration=30, max_duration=80, target_duration=50
+        )
+
+        # Original (sequential)
+        for i in range(10):  # Check first 10 paths
+            path = prices_2d[i]
+            usd, shares, total_shares, end_day = strategy_4(
+                path, total_usd, 30, 80, 50
+            )
+            benchmark = np.mean(path[:end_day])
+            vwap = total_usd / total_shares
+            perf = execution_performance_bps(vwap, benchmark)
+
+            assert np.isclose(perf_vec[i], perf, rtol=0.1), f"Path {i} performance mismatch"
+            assert dur_vec[i] == end_day, f"Path {i} duration mismatch"
+
+    def test_strategy4_completes_all_paths(self):
+        """Verify all paths complete execution."""
+        np.random.seed(123)
+        prices = np.random.rand(100, 150) * 50 + 75
+        benchmarks = precompute_benchmarks(prices)
+        total_usd = 1_000_000
+
+        perf, dur, vwap, bench = strategy_4_vectorized(
+            prices, benchmarks, total_usd,
+            min_duration=30, max_duration=100, target_duration=60
+        )
+
+        # All paths should have completed
+        assert np.all(dur > 0), "All paths should have positive duration"
+        assert np.all(dur <= 100), "All paths should complete by max_duration"
+
+    def test_strategy4_duration_in_bounds(self):
+        """Verify durations are within min/max bounds."""
+        np.random.seed(456)
+        prices = np.random.rand(200, 150) * 50 + 75
+        benchmarks = precompute_benchmarks(prices)
+
+        min_dur, max_dur = 40, 120
+        perf, dur, vwap, bench = strategy_4_vectorized(
+            prices, benchmarks, 1_000_000,
+            min_duration=min_dur, max_duration=max_dur, target_duration=80
+        )
+
+        # All paths should respect max_duration
+        assert np.all(dur <= max_dur), "All paths should respect max_duration"
+
+    def test_strategy4_convex_response(self):
+        """Test convex scaling responds to price deviations."""
+        # Create prices that drop below benchmark
+        prices_down = np.array([[100.0] * 20 + [75.0] * 80 for _ in range(50)])
+        benchmarks = precompute_benchmarks(prices_down)
+
+        perf, dur, vwap, bench = strategy_4_vectorized(
+            prices_down, benchmarks, 1_000_000,
+            min_duration=30, max_duration=80, target_duration=50
+        )
+
+        # Should finish faster than target when prices are favorable
+        avg_duration = dur.mean()
+        assert avg_duration < 80, f"Average duration {avg_duration} should be below max"
+
+    def test_strategy4_outperforms_strategy1_vectorized(self):
+        """Test that Strategy 4 generally outperforms Strategy 1."""
+        np.random.seed(42)
+        prices = np.random.rand(500, 125) * 50 + 75
+        benchmarks = precompute_benchmarks(prices)
+
+        # Strategy 1
+        perf1, dur1, _, _ = strategy_1_vectorized(prices, 1_000_000, 100)
+
+        # Strategy 4
+        perf4, dur4, _, _ = strategy_4_vectorized(
+            prices, benchmarks, 1_000_000,
+            min_duration=75, max_duration=125, target_duration=100
+        )
+
+        mean_s1 = np.mean(perf1)
+        mean_s4 = np.mean(perf4)
+
+        # Strategy 4 should outperform Strategy 1 on average
+        assert mean_s4 > mean_s1, f"S4 ({mean_s4:.2f}) should outperform S1 ({mean_s1:.2f})"
 
 
 class TestRunAllStrategiesVectorized:

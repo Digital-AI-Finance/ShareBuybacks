@@ -14,12 +14,12 @@ import pandas as pd
 from modules.config import (
     DEFAULT_S0, DEFAULT_DAYS, DEFAULT_MU, DEFAULT_SIGMA, DEFAULT_SIMULATIONS,
     DEFAULT_USD, DEFAULT_MAX_DURATION, DEFAULT_MIN_DURATION, DEFAULT_TARGET_DURATION,
-    DEFAULT_DISCOUNT_BPS, TRADING_DAYS_PER_YEAR
+    DEFAULT_DISCOUNT_BPS, TRADING_DAYS_PER_YEAR, S5_MIN_COMPLETION_PCT
 )
 from modules.gbm import generate_gbm_paths
 from modules.benchmarks import compute_benchmark
 from modules.strategies import (
-    strategy_1, strategy_2, strategy_3,
+    strategy_1, strategy_2, strategy_3, strategy_4, strategy_5,
     compute_execution_vwap_series, compute_performance_series
 )
 from modules.strategies_vectorized import (
@@ -165,6 +165,20 @@ discount_bps = st.sidebar.number_input(
     key="input_discount_bps"
 )
 
+st.sidebar.markdown("---")
+
+# Strategy 5 parameters
+st.sidebar.subheader("Strategy 5 Parameters")
+min_completion_pct = st.sidebar.slider(
+    "Minimum Completion (%)",
+    min_value=85.0,
+    max_value=100.0,
+    value=S5_MIN_COMPLETION_PCT,
+    step=1.0,
+    key="slider_min_completion",
+    help="Minimum percentage of USD that must be executed. Lower values allow more patience at unfavorable prices."
+)
+
 # Validation warning
 if n_days < max_duration:
     st.sidebar.warning(f"Days ({n_days}) should be >= Max Duration ({max_duration})")
@@ -194,7 +208,7 @@ if 'example_results' not in st.session_state:
 
 
 def run_simulation_progressive(prices, total_usd, min_duration, max_duration,
-                               target_duration, discount_bps, progress_bar, status_text):
+                               target_duration, discount_bps, min_completion_pct, progress_bar, status_text):
     """
     Run simulation with progressive loading using vectorized strategies.
 
@@ -213,7 +227,9 @@ def run_simulation_progressive(prices, total_usd, min_duration, max_duration,
     all_results = {
         'Strategy 1': {'performances': [], 'durations': []},
         'Strategy 2': {'performances': [], 'durations': []},
-        'Strategy 3': {'performances': [], 'durations': []}
+        'Strategy 3': {'performances': [], 'durations': []},
+        'Strategy 4': {'performances': [], 'durations': []},
+        'Strategy 5': {'performances': [], 'durations': [], 'completion_pcts': []}
     }
 
     processed = 0
@@ -227,13 +243,15 @@ def run_simulation_progressive(prices, total_usd, min_duration, max_duration,
         # Run vectorized strategies on batch
         batch_results = run_all_strategies_vectorized(
             batch_paths, total_usd, min_duration, max_duration,
-            target_duration, discount_bps
+            target_duration, discount_bps, min_completion_pct
         )
 
         # Accumulate results
         for strategy in all_results:
             all_results[strategy]['performances'].extend(batch_results[strategy]['performances'])
             all_results[strategy]['durations'].extend(batch_results[strategy]['durations'])
+            if 'completion_pcts' in all_results[strategy] and 'completion_pcts' in batch_results[strategy]:
+                all_results[strategy]['completion_pcts'].extend(batch_results[strategy]['completion_pcts'])
 
         processed = end_idx
         progress_pct = processed / n_sims
@@ -244,12 +262,14 @@ def run_simulation_progressive(prices, total_usd, min_duration, max_duration,
     for strategy in all_results:
         all_results[strategy]['performances'] = np.array(all_results[strategy]['performances'])
         all_results[strategy]['durations'] = np.array(all_results[strategy]['durations'])
+        if 'completion_pcts' in all_results[strategy] and len(all_results[strategy]['completion_pcts']) > 0:
+            all_results[strategy]['completion_pcts'] = np.array(all_results[strategy]['completion_pcts'])
 
     return all_results
 
 
 def run_all_strategies(prices, total_usd, min_duration, max_duration, target_duration, discount_bps):
-    """Run all three strategies using vectorized implementation (for backward compatibility)."""
+    """Run all four strategies using vectorized implementation (for backward compatibility)."""
     return run_all_strategies_vectorized(
         prices, total_usd, min_duration, max_duration, target_duration, discount_bps
     )
@@ -273,7 +293,7 @@ with tab1:
         stock_params = {'S0': S0, 'mu': mu, 'sigma': sigma, 'n_days': n_days, 'n_sims': n_simulations, 'seed': seed}
         strategy_params = {'total_usd': total_usd, 'min_duration': min_duration,
                           'max_duration': max_duration, 'target_duration': target_duration,
-                          'discount_bps': discount_bps}
+                          'discount_bps': discount_bps, 'min_completion_pct': min_completion_pct}
 
         cached_results = get_cached_results(stock_params, strategy_params)
 
@@ -285,7 +305,7 @@ with tab1:
             # Run with progressive loading
             results = run_simulation_progressive(
                 paths, total_usd, min_duration, max_duration,
-                target_duration, discount_bps, progress_bar, status_text
+                target_duration, discount_bps, min_completion_pct, progress_bar, status_text
             )
             # Cache results
             set_cached_results(stock_params, strategy_params, results)
@@ -298,7 +318,8 @@ with tab1:
                 'S0': S0, 'mu': mu, 'sigma': sigma, 'n_days': n_days,
                 'n_simulations': n_simulations, 'total_usd': total_usd,
                 'min_duration': min_duration, 'max_duration': max_duration,
-                'target_duration': target_duration, 'discount_bps': discount_bps
+                'target_duration': target_duration, 'discount_bps': discount_bps,
+                'min_completion_pct': min_completion_pct
             }
         }
 
@@ -323,7 +344,7 @@ with tab1:
 
         # Performance histograms
         st.subheader("Performance Distributions (bps)")
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
             fig_perf1 = plot_performance_histogram(
@@ -346,11 +367,25 @@ with tab1:
             )
             st.plotly_chart(fig_perf3, use_container_width=True, key="chart_perf_hist_3")
 
+        with col4:
+            fig_perf4 = plot_performance_histogram(
+                results['Strategy 4']['performances'],
+                "Strategy 4 (Convex)"
+            )
+            st.plotly_chart(fig_perf4, use_container_width=True, key="chart_perf_hist_4")
+
+        with col5:
+            fig_perf5 = plot_performance_histogram(
+                results['Strategy 5']['performances'],
+                f"Strategy 5 (Flex {params['min_completion_pct']:.0f}%)"
+            )
+            st.plotly_chart(fig_perf5, use_container_width=True, key="chart_perf_hist_5")
+
         # Duration histograms
         st.subheader("Duration Distributions")
-        col4, col5, col6 = st.columns(3)
+        col6, col7, col8, col9, col10 = st.columns(5)
 
-        with col4:
+        with col6:
             fig_dur1 = plot_duration_histogram(
                 results['Strategy 1']['durations'],
                 "Strategy 1 (Uniform)",
@@ -358,7 +393,7 @@ with tab1:
             )
             st.plotly_chart(fig_dur1, use_container_width=True, key="chart_dur_hist_1")
 
-        with col5:
+        with col7:
             fig_dur2 = plot_duration_histogram(
                 results['Strategy 2']['durations'],
                 "Strategy 2 (Adaptive)",
@@ -366,7 +401,7 @@ with tab1:
             )
             st.plotly_chart(fig_dur2, use_container_width=True, key="chart_dur_hist_2")
 
-        with col6:
+        with col8:
             fig_dur3 = plot_duration_histogram(
                 results['Strategy 3']['durations'],
                 f"Strategy 3 (Discount {params['discount_bps']}bps)",
@@ -374,17 +409,33 @@ with tab1:
             )
             st.plotly_chart(fig_dur3, use_container_width=True, key="chart_dur_hist_3")
 
+        with col9:
+            fig_dur4 = plot_duration_histogram(
+                results['Strategy 4']['durations'],
+                "Strategy 4 (Convex)",
+                params['min_duration'], params['target_duration'], params['max_duration']
+            )
+            st.plotly_chart(fig_dur4, use_container_width=True, key="chart_dur_hist_4")
+
+        with col10:
+            fig_dur5 = plot_duration_histogram(
+                results['Strategy 5']['durations'],
+                f"Strategy 5 (Flex {params['min_completion_pct']:.0f}%)",
+                params['min_duration'], params['target_duration'], params['max_duration']
+            )
+            st.plotly_chart(fig_dur5, use_container_width=True, key="chart_dur_hist_5")
+
         # Summary statistics table
         st.subheader("Summary Statistics")
 
         summary_data = []
-        for strategy_name in ['Strategy 1', 'Strategy 2', 'Strategy 3']:
+        for strategy_name in ['Strategy 1', 'Strategy 2', 'Strategy 3', 'Strategy 4', 'Strategy 5']:
             perfs = results[strategy_name]['performances']
             durs = results[strategy_name]['durations']
             mean_perf, se_perf = mean_with_se(perfs)
             mean_dur, se_dur = mean_with_se(durs)
 
-            summary_data.append({
+            row = {
                 'Strategy': strategy_name,
                 'Mean Performance (bps)': f"{mean_perf:.2f}",
                 'SE Performance': f"{se_perf:.2f}",
@@ -393,7 +444,18 @@ with tab1:
                 'SE Duration': f"{se_dur:.1f}",
                 'Duration +/- SE': f"{mean_dur:.1f} +/- {se_dur:.1f}",
                 'Win Rate (%)': f"{100 * np.mean(perfs > 0):.1f}"
-            })
+            }
+
+            # Add completion % for Strategy 5
+            if strategy_name == 'Strategy 5' and 'completion_pcts' in results[strategy_name]:
+                completions = results[strategy_name]['completion_pcts']
+                row['Avg Completion (%)'] = f"{np.mean(completions):.2f}"
+                row['Partial (<100%)'] = f"{np.sum(completions < 100)}"
+            else:
+                row['Avg Completion (%)'] = "100.00"
+                row['Partial (<100%)'] = "0"
+
+            summary_data.append(row)
 
         df_summary = pd.DataFrame(summary_data)
         st.dataframe(df_summary, use_container_width=True, hide_index=True)
@@ -454,6 +516,36 @@ with tab2:
                 'perf_series': perf_series3
             }
 
+            # Strategy 4
+            usd4, shares4, total_shares4, end4 = strategy_4(
+                example_path, total_usd, min_duration, max_duration, target_duration
+            )
+            benchmark4 = compute_benchmark(example_path)
+            vwap_series4 = compute_execution_vwap_series(example_path, usd4, shares4)
+            perf_series4 = compute_performance_series(vwap_series4, benchmark4)
+            example_results['Strategy 4'] = {
+                'usd_per_day': usd4, 'shares_per_day': shares4,
+                'total_shares': total_shares4, 'end_day': end4,
+                'benchmark': benchmark4, 'vwap_series': vwap_series4,
+                'perf_series': perf_series4
+            }
+
+            # Strategy 5
+            usd5, shares5, total_shares5, end5, completion_pct5 = strategy_5(
+                example_path, total_usd, min_duration, max_duration, target_duration,
+                min_completion_pct=min_completion_pct
+            )
+            benchmark5 = compute_benchmark(example_path)
+            vwap_series5 = compute_execution_vwap_series(example_path, usd5, shares5)
+            perf_series5 = compute_performance_series(vwap_series5, benchmark5)
+            example_results['Strategy 5'] = {
+                'usd_per_day': usd5, 'shares_per_day': shares5,
+                'total_shares': total_shares5, 'end_day': end5,
+                'benchmark': benchmark5, 'vwap_series': vwap_series5,
+                'perf_series': perf_series5,
+                'completion_pct': completion_pct5
+            }
+
             st.session_state.example_results = {
                 'path': example_path,
                 'results': example_results,
@@ -461,7 +553,8 @@ with tab2:
                     'min_duration': min_duration,
                     'max_duration': max_duration,
                     'target_duration': target_duration,
-                    'discount_bps': discount_bps
+                    'discount_bps': discount_bps,
+                    'min_completion_pct': min_completion_pct
                 }
             }
 
@@ -475,8 +568,8 @@ with tab2:
 
         st.subheader("Single Path Example Execution")
 
-        # Display three strategy execution charts
-        for strategy_name in ['Strategy 1', 'Strategy 2', 'Strategy 3']:
+        # Display five strategy execution charts
+        for strategy_name in ['Strategy 1', 'Strategy 2', 'Strategy 3', 'Strategy 4', 'Strategy 5']:
             st.markdown(f"### {strategy_name}")
 
             res = example_results[strategy_name]
@@ -509,13 +602,19 @@ with tab2:
                 st.plotly_chart(fig_usd, use_container_width=True, key=f"chart_example_usd_{strategy_name}")
 
             # Summary metrics for this strategy
-            final_vwap = total_usd / res['total_shares']
+            final_vwap = total_usd / res['total_shares'] if res['total_shares'] > 0 else 0
             final_benchmark = np.mean(example_path[:res['end_day']])
             final_perf = execution_performance_bps(final_vwap, final_benchmark)
 
-            st.markdown(f"""
-            **Results:** End Day: {res['end_day']} | VWAP: ${final_vwap:.2f} | Benchmark: ${final_benchmark:.2f} | Performance: {final_perf:.1f} bps
-            """)
+            # For Strategy 5, also show completion %
+            if strategy_name == 'Strategy 5' and 'completion_pct' in res:
+                st.markdown(f"""
+                **Results:** End Day: {res['end_day']} | VWAP: ${final_vwap:.2f} | Benchmark: ${final_benchmark:.2f} | Performance: {final_perf:.1f} bps | Completion: {res['completion_pct']:.1f}%
+                """)
+            else:
+                st.markdown(f"""
+                **Results:** End Day: {res['end_day']} | VWAP: ${final_vwap:.2f} | Benchmark: ${final_benchmark:.2f} | Performance: {final_perf:.1f} bps
+                """)
             st.markdown("---")
 
     else:
@@ -662,6 +761,74 @@ with tab3:
 
     ---
 
+    ### Strategy 4: Multi-Factor Convex Adaptive
+
+    An advanced strategy that combines three components for potentially superior performance:
+
+    **Component D: Exponential Convex Scaling**
+
+    $$\\text{deviation} = \\frac{\\text{Benchmark} - \\text{Price}}{\\text{Benchmark}}$$
+    $$\\text{convex\\_multiplier} = e^{\\beta \\cdot \\text{deviation}}$$
+
+    Where $\\beta = 20$ (convex sensitivity). This creates an exponential response to price deviations,
+    concentrating buying power on large discounts rather than small ones.
+
+    **Component E: Time-Urgency Factor**
+
+    $$\\text{urgency} = 1 + \\gamma \\cdot \\left(\\frac{\\text{day}}{\\text{max\\_duration}}\\right)^2$$
+
+    Where $\\gamma = 3$ (urgency acceleration). This quadratically increases buying aggression
+    as the deadline approaches, ensuring completion regardless of price.
+
+    **Component F: Z-Score Statistical Filter**
+
+    $$z = \\frac{\\bar{P}_{\\text{rolling}} - P_t}{\\sigma_{\\text{rolling}}}$$
+
+    Where the rolling window is 20 days. Only acts on statistically significant signals
+    ($|z| > 1.0$), filtering out noise.
+
+    **Combined Execution:**
+    - If $|z| > z_{\\text{threshold}}$: Full response = convex $\\times$ urgency $\\times$ signal boost
+    - Otherwise: Conservative response = urgency only
+
+    The final multiplier is bounded: $0.1 \\leq \\text{multiplier} \\leq 8.0$
+
+    ---
+
+    ### Strategy 5: Flexible Completion Adaptive
+
+    Strategy 5 builds on Strategy 4's convex approach but adds **flexible completion** to avoid
+    forced buying at unfavorable prices at the deadline.
+
+    **Core Logic (same as Strategy 4):**
+    - Exponential convex scaling based on price vs benchmark deviation
+    - Time-urgency factor that increases as deadline approaches
+
+    **Key Innovation: Partial Completion**
+
+    At the deadline (max_duration), Strategy 5 evaluates:
+    ```
+    if executed_usd >= min_usd AND final_deviation < unfavorable_threshold:
+        Accept partial completion (don't force-buy remaining)
+    else:
+        Complete remaining execution normally
+    ```
+
+    **Parameters:**
+    | Parameter | Default | Description |
+    |-----------|---------|-------------|
+    | min_completion_pct | 95% | Minimum required execution (85-100%) |
+    | unfavorable_threshold | -1% | Skip forced completion if price > benchmark by this |
+    | beta | 50 | Convex sensitivity |
+    | gamma | 1 | Urgency acceleration |
+
+    **Benefits:**
+    - Avoids worst-case forced buying at highly unfavorable prices
+    - Maintains most of Strategy 4's adaptive behavior
+    - Configurable risk/completion trade-off
+
+    ---
+
     ## Performance Metrics
 
     ### VWAP (Volume-Weighted Average Price)
@@ -730,8 +897,10 @@ with tab3:
     1. **Strategy 1** provides a simple baseline with predictable execution
     2. **Strategy 2** exploits mean reversion by buying more when prices are favorable
     3. **Strategy 3** with discount creates a more aggressive buying bias
-    4. Flexible end times allow the strategy to capitalize on favorable conditions
-    5. The benchmark provides a natural target that adjusts to market conditions
+    4. **Strategy 4** uses convex scaling to concentrate buying on large discounts while filtering noise
+    5. **Strategy 5** adds flexible completion to avoid forced buying at unfavorable deadline prices
+    6. Flexible end times allow the strategy to capitalize on favorable conditions
+    7. The benchmark provides a natural target that adjusts to market conditions
     """)
 
     st.markdown("---")

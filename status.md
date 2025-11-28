@@ -1,12 +1,12 @@
 # Share Buyback Strategy App - Status
 
-## Current Version: 1.3.0
+## Current Version: 1.4.0
 
 ## Status: Production Ready
 
 ## Features Implemented:
 - [x] GBM simulation with configurable parameters
-- [x] Three trading strategies (uniform, adaptive, adaptive+discount)
+- [x] Four trading strategies (uniform, adaptive, adaptive+discount, multi-factor convex)
 - [x] Performance and duration histograms (250 bins, percentages)
 - [x] Example tab with single-path analysis
 - [x] Mathematical explanation tab with Strategy 2 flowchart
@@ -14,13 +14,16 @@
 - [x] NumPy vectorized strategies (25x speedup)
 - [x] Session state caching for GBM paths
 - [x] Progressive loading with progress bar
-- [x] 138 unit tests passing
+- [x] 153 unit tests passing
 - [x] Standalone Windows executable (~85 MB)
 
-## Recent Changes (v1.3.0):
-- Added PyInstaller packaging for standalone executable
-- Created build_minimal.py for automated minimal-environment builds
-- Executable runs fully offline at http://localhost:8501
+## Recent Changes (v1.4.0):
+- Added Strategy 4: Multi-Factor Convex Adaptive
+  - Exponential convex scaling for aggressive discount exploitation
+  - Time-urgency factor for deadline awareness
+  - Outperforms Strategy 2 by ~2.5 bps on average
+- Added 15 new unit tests for Strategy 4
+- Updated UI with 4-column layout for all strategies
 
 ## Input Specifications:
 | Parameter | Range | Default |

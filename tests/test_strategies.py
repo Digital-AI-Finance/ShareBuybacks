@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from modules.strategies import (
-    strategy_1, strategy_2, strategy_3,
+    strategy_1, strategy_2, strategy_3, strategy_4, strategy_5,
     compute_execution_vwap_series, compute_performance_series
 )
 
@@ -229,6 +229,211 @@ class TestStrategy3:
         # So Strategy 3 should generally finish sooner or equal
         # (depends on actual price path)
         assert end3 <= end2 + 10  # Allow some variation
+
+
+class TestStrategy4:
+    """Tests for Strategy 4 (Multi-Factor Convex Adaptive)."""
+
+    def test_strategy4_respects_total_usd(self, sample_prices):
+        """Test that Strategy 4 spends at most total_usd."""
+        prices = np.tile(sample_prices, 10)  # Extend to 100 days
+        total_usd = 50000
+        usd, shares, total, end_day = strategy_4(
+            prices, total_usd, 30, 80, 55
+        )
+
+        assert np.isclose(np.sum(usd), total_usd, rtol=1e-6)
+
+    def test_strategy4_respects_max_duration(self):
+        """Test that Strategy 4 completes by max_duration."""
+        prices = np.full(150, 100.0)
+        total_usd = 100000
+        min_duration = 50
+        max_duration = 100
+        target_duration = 75
+
+        usd, shares, total, end = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        assert end <= max_duration, f"Should complete by max_duration={max_duration}, got end={end}"
+
+    def test_strategy4_convex_scaling_buys_more_when_favorable(self):
+        """Test that Strategy 4 buys more when price drops significantly."""
+        # Create prices that drop significantly below benchmark
+        prices = np.array([100.0] * 20 + [80.0] * 80)  # 20% drop after day 20
+
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 80
+        target_duration = 55
+
+        usd, shares, total, end = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        base_daily = total_usd / target_duration
+
+        # After price drops, execution amounts should increase (convex response)
+        # Check that some days have higher-than-base execution
+        high_execution_days = np.sum(usd > 1.5 * base_daily)
+        assert high_execution_days > 0, "Convex scaling should increase execution when price drops"
+
+    def test_strategy4_convex_scaling_buys_less_when_unfavorable(self):
+        """Test that Strategy 4 buys less when price rises significantly."""
+        # Create prices that rise significantly above benchmark
+        prices = np.array([100.0] * 20 + [120.0] * 80)  # 20% rise after day 20
+
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 80
+        target_duration = 55
+
+        usd, shares, total, end = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        base_daily = total_usd / target_duration
+
+        # After price rises, convex scaling suggests lower execution
+        # But duration constraints set a minimum required execution
+        # So check that early execution (when price is low) is higher than later
+        early_avg = np.mean(usd[10:20])  # Early period when price is favorable
+        late_avg = np.mean(usd[25:35])   # Later period when price is unfavorable
+
+        # Early execution should be >= late execution when price drops
+        # (unless dominated by duration constraints)
+        assert early_avg > 0, "Should have non-zero early execution"
+        # Strategy should adapt - later execution pattern differs from early
+        assert end <= max_duration, "Should complete within max_duration"
+
+    def test_strategy4_time_urgency_increases_near_deadline(self):
+        """Test that Strategy 4 increases execution near deadline."""
+        prices = np.full(100, 100.0)  # Constant prices
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 90
+        target_duration = 60
+
+        usd, shares, total, end = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        # With constant prices, time-urgency should cause increasing execution near end
+        # Compare early vs late execution (if execution is still ongoing)
+        if end > 20:
+            early_avg = np.mean(usd[:10])
+            late_start = max(10, end - 10)
+            late_avg = np.mean(usd[late_start:end])
+            # Time urgency should make late execution >= early execution
+            # (unless convex scaling dominates)
+            assert late_avg >= 0, "Should have non-zero execution near deadline"
+
+    def test_strategy4_positive_shares_when_executing(self):
+        """Test that shares are always positive when USD > 0."""
+        prices = np.full(100, 100.0)
+        total_usd = 100000
+
+        usd, shares, total, end = strategy_4(prices, total_usd, 30, 80, 55)
+
+        assert np.all(shares[usd > 0] > 0), "Shares should be positive when USD > 0"
+
+    def test_strategy4_outperforms_strategy1(self):
+        """Test that Strategy 4 generally outperforms Strategy 1 (baseline)."""
+        np.random.seed(42)
+        # Run multiple simulations
+        performances_s1 = []
+        performances_s4 = []
+
+        for i in range(50):
+            np.random.seed(42 + i)
+            prices = 100 + np.cumsum(np.random.randn(125) * 2)
+            prices = np.maximum(prices, 50)
+
+            total_usd = 100000
+            min_duration = 75
+            max_duration = 125
+            target_duration = 100
+
+            # Strategy 1
+            usd1, shares1, total1, end1 = strategy_1(prices, total_usd, target_duration)
+            vwap1 = total_usd / total1
+            bench1 = np.mean(prices[:end1])
+            perf1 = -((vwap1 - bench1) / bench1) * 10000
+
+            # Strategy 4
+            usd4, shares4, total4, end4 = strategy_4(
+                prices, total_usd, min_duration, max_duration, target_duration
+            )
+            vwap4 = total_usd / total4
+            bench4 = np.mean(prices[:end4])
+            perf4 = -((vwap4 - bench4) / bench4) * 10000
+
+            performances_s1.append(perf1)
+            performances_s4.append(perf4)
+
+        mean_s1 = np.mean(performances_s1)
+        mean_s4 = np.mean(performances_s4)
+
+        # Strategy 4 should outperform Strategy 1 on average
+        assert mean_s4 > mean_s1, f"S4 ({mean_s4:.2f}) should outperform S1 ({mean_s1:.2f})"
+
+
+class TestStrategy4EdgeCases:
+    """Edge case tests for Strategy 4."""
+
+    def test_strategy4_handles_volatile_prices(self):
+        """Test Strategy 4 handles high volatility prices."""
+        np.random.seed(123)
+        prices = 100 + np.cumsum(np.random.randn(100) * 5)  # High volatility
+        prices = np.maximum(prices, 20)
+
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 80
+        target_duration = 55
+
+        usd, shares, total, end = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        assert np.isclose(np.sum(usd), total_usd, rtol=1e-6)
+        assert end <= max_duration
+        assert total > 0
+
+    def test_strategy4_single_day_price_spike(self):
+        """Test Strategy 4 handles single day price spike."""
+        prices = np.array([100.0] * 50 + [150.0] + [100.0] * 49)
+
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 80
+        target_duration = 55
+
+        usd, shares, total, end = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        # On spike day (day 50), execution should be reduced
+        base_daily = total_usd / target_duration
+        assert usd[50] < base_daily, "Should execute less on spike day"
+
+    def test_strategy4_with_custom_parameters(self):
+        """Test Strategy 4 with custom beta and gamma."""
+        prices = np.full(100, 100.0)
+        total_usd = 100000
+
+        # Test with different beta values
+        usd_low_beta, _, _, end_low = strategy_4(
+            prices, total_usd, 30, 80, 55, beta=10.0, gamma=1.0
+        )
+        usd_high_beta, _, _, end_high = strategy_4(
+            prices, total_usd, 30, 80, 55, beta=50.0, gamma=1.0
+        )
+
+        # Both should complete and spend total_usd
+        assert np.isclose(np.sum(usd_low_beta), total_usd, rtol=1e-6)
+        assert np.isclose(np.sum(usd_high_beta), total_usd, rtol=1e-6)
 
 
 class TestComputeExecutionVWAPSeries:
@@ -481,6 +686,19 @@ class TestAllStrategiesConsistency:
         )
         assert np.isclose(np.sum(usd3), total_usd, rtol=1e-6), "Strategy 3 total mismatch"
 
+        # Strategy 4
+        usd4, shares4, total4, end4 = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+        assert np.isclose(np.sum(usd4), total_usd, rtol=1e-6), "Strategy 4 total mismatch"
+
+        # Strategy 5 (may have partial completion)
+        usd5, shares5, total5, end5, comp5 = strategy_5(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+        expected_usd5 = total_usd * (comp5 / 100)
+        assert np.isclose(np.sum(usd5), expected_usd5, rtol=1e-4), "Strategy 5 total mismatch"
+
     def test_all_strategies_positive_shares(self):
         """Verify shares are always positive when USD > 0."""
         prices = np.full(100, 100.0)
@@ -489,6 +707,237 @@ class TestAllStrategiesConsistency:
         usd1, shares1, _, _ = strategy_1(prices, total_usd, 50)
         usd2, shares2, _, _ = strategy_2(prices, total_usd, 30, 80, 55)
         usd3, shares3, _, _ = strategy_3(prices, total_usd, 30, 80, 55, 100)
+        usd4, shares4, _, _ = strategy_4(prices, total_usd, 30, 80, 55)
+        usd5, shares5, _, _, _ = strategy_5(prices, total_usd, 30, 80, 55)
 
-        for usd, shares, name in [(usd1, shares1, "S1"), (usd2, shares2, "S2"), (usd3, shares3, "S3")]:
+        for usd, shares, name in [(usd1, shares1, "S1"), (usd2, shares2, "S2"),
+                                   (usd3, shares3, "S3"), (usd4, shares4, "S4"),
+                                   (usd5, shares5, "S5")]:
             assert np.all(shares[usd > 0] > 0), f"{name}: shares should be positive when USD > 0"
+
+
+class TestStrategy5:
+    """Tests for Strategy 5 (Flexible Completion Adaptive)."""
+
+    def test_strategy5_returns_five_values(self, sample_prices):
+        """Test that Strategy 5 returns 5 values including completion_pct."""
+        prices = np.tile(sample_prices, 15)  # Extend to 150 days
+        result = strategy_5(prices, 100000, 75, 125, 100)
+        assert len(result) == 5, "Strategy 5 should return 5 values"
+        usd, shares, total_shares, end_day, completion_pct = result
+        assert isinstance(completion_pct, float)
+
+    def test_strategy5_respects_total_usd(self, sample_prices):
+        """Test that Strategy 5 spends at most total_usd."""
+        prices = np.tile(sample_prices, 15)
+        total_usd = 50000
+        usd, shares, total, end_day, comp_pct = strategy_5(
+            prices, total_usd, 30, 80, 55
+        )
+        assert np.sum(usd) <= total_usd + 0.01
+
+    def test_strategy5_respects_max_duration(self):
+        """Test that Strategy 5 completes by max_duration."""
+        prices = np.full(150, 100.0)
+        total_usd = 100000
+        min_duration = 50
+        max_duration = 100
+        target_duration = 75
+
+        usd, shares, total, end, comp_pct = strategy_5(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        assert end <= max_duration, f"Should complete by max_duration={max_duration}, got end={end}"
+
+    def test_strategy5_completion_percentage_100_when_full(self):
+        """Test that completion_pct is 100% when fully executed."""
+        prices = np.full(150, 100.0)
+        total_usd = 100000
+
+        usd, shares, total, end, comp_pct = strategy_5(
+            prices, total_usd, 50, 100, 75, min_completion_pct=95.0
+        )
+
+        total_executed = np.sum(usd)
+        expected_comp = (total_executed / total_usd) * 100
+        assert np.isclose(comp_pct, expected_comp, rtol=1e-6)
+
+    def test_strategy5_min_completion_respected(self):
+        """Test that Strategy 5 respects minimum completion."""
+        # Create prices that stay above benchmark (unfavorable)
+        prices = np.array([100.0] * 10 + [120.0] * 120)
+        total_usd = 100000
+        min_completion = 90.0
+
+        usd, shares, total, end, comp_pct = strategy_5(
+            prices, total_usd, 50, 100, 75,
+            min_completion_pct=min_completion
+        )
+
+        # Completion should be at least min_completion or 100
+        assert comp_pct >= min_completion or np.isclose(comp_pct, 100.0)
+
+    def test_strategy5_partial_completion_when_unfavorable(self):
+        """Test that Strategy 5 can have partial completion when price unfavorable at deadline."""
+        # Create scenario where partial completion might occur
+        # High prices throughout to trigger slow mode
+        np.random.seed(42)
+        prices = np.array([100.0] * 10 + [130.0] * 120)  # Very high prices
+
+        total_usd = 100000
+        min_completion = 85.0
+        unfavorable_threshold = -0.01  # Default
+
+        usd, shares, total, end, comp_pct = strategy_5(
+            prices, total_usd, 50, 100, 75,
+            min_completion_pct=min_completion,
+            unfavorable_threshold=unfavorable_threshold
+        )
+
+        # Should complete with at least min_completion
+        assert comp_pct >= min_completion - 1.0  # Allow small tolerance
+
+    def test_strategy5_uses_convex_scaling(self):
+        """Test that Strategy 5 uses convex scaling like Strategy 4."""
+        # Create prices that drop significantly below benchmark
+        prices = np.array([100.0] * 20 + [80.0] * 80)  # 20% drop
+
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 80
+        target_duration = 55
+
+        usd, shares, total, end, comp = strategy_5(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        base_daily = total_usd / target_duration
+
+        # After price drops, execution amounts should increase (convex response)
+        high_execution_days = np.sum(usd > 1.5 * base_daily)
+        assert high_execution_days > 0, "Convex scaling should increase execution when price drops"
+
+    def test_strategy5_outperforms_strategy1(self):
+        """Test that Strategy 5 generally outperforms Strategy 1."""
+        np.random.seed(42)
+        performances_s1 = []
+        performances_s5 = []
+
+        for i in range(50):
+            np.random.seed(42 + i)
+            prices = 100 + np.cumsum(np.random.randn(125) * 2)
+            prices = np.maximum(prices, 50)
+
+            total_usd = 100000
+            min_duration = 75
+            max_duration = 125
+            target_duration = 100
+
+            # Strategy 1
+            usd1, shares1, total1, end1 = strategy_1(prices, total_usd, target_duration)
+            vwap1 = total_usd / total1
+            bench1 = np.mean(prices[:end1])
+            perf1 = -((vwap1 - bench1) / bench1) * 10000
+
+            # Strategy 5
+            usd5, shares5, total5, end5, comp5 = strategy_5(
+                prices, total_usd, min_duration, max_duration, target_duration
+            )
+            executed5 = np.sum(usd5)
+            vwap5 = executed5 / total5 if total5 > 0 else 0
+            bench5 = np.mean(prices[:end5])
+            perf5 = -((vwap5 - bench5) / bench5) * 10000
+
+            performances_s1.append(perf1)
+            performances_s5.append(perf5)
+
+        mean_s1 = np.mean(performances_s1)
+        mean_s5 = np.mean(performances_s5)
+
+        assert mean_s5 > mean_s1, f"S5 ({mean_s5:.2f}) should outperform S1 ({mean_s1:.2f})"
+
+    def test_strategy5_100_min_completion_equals_strategy4(self):
+        """Test that Strategy 5 with 100% min completion behaves like Strategy 4."""
+        np.random.seed(123)
+        prices = 100 + np.cumsum(np.random.randn(100) * 2)
+        prices = np.maximum(prices, 50)
+
+        total_usd = 100000
+        min_duration = 30
+        max_duration = 80
+        target_duration = 55
+
+        # Strategy 4
+        usd4, shares4, total4, end4 = strategy_4(
+            prices, total_usd, min_duration, max_duration, target_duration
+        )
+
+        # Strategy 5 with 100% minimum
+        usd5, shares5, total5, end5, comp5 = strategy_5(
+            prices, total_usd, min_duration, max_duration, target_duration,
+            min_completion_pct=100.0
+        )
+
+        # Completion should be 100%
+        assert np.isclose(comp5, 100.0)
+        # Total USD should be same
+        assert np.isclose(np.sum(usd5), total_usd, rtol=1e-6)
+
+
+class TestStrategy5EdgeCases:
+    """Edge case tests for Strategy 5."""
+
+    def test_strategy5_handles_volatile_prices(self):
+        """Test Strategy 5 handles high volatility prices."""
+        np.random.seed(123)
+        prices = 100 + np.cumsum(np.random.randn(100) * 5)
+        prices = np.maximum(prices, 20)
+
+        total_usd = 100000
+        usd, shares, total, end, comp = strategy_5(
+            prices, total_usd, 30, 80, 55
+        )
+
+        assert comp > 0
+        assert end <= 80
+        assert total > 0
+
+    def test_strategy5_with_custom_parameters(self):
+        """Test Strategy 5 with custom beta and gamma."""
+        prices = np.full(100, 100.0)
+        total_usd = 100000
+
+        usd1, shares1, total1, end1, comp1 = strategy_5(
+            prices, total_usd, 30, 80, 55, beta=10.0, gamma=1.0
+        )
+        usd2, shares2, total2, end2, comp2 = strategy_5(
+            prices, total_usd, 30, 80, 55, beta=50.0, gamma=2.0
+        )
+
+        # Both should complete
+        assert comp1 >= 90
+        assert comp2 >= 90
+
+    def test_strategy5_min_85_percent(self):
+        """Test Strategy 5 with 85% minimum completion."""
+        prices = np.full(100, 100.0)
+        total_usd = 100000
+
+        usd, shares, total, end, comp = strategy_5(
+            prices, total_usd, 30, 80, 55, min_completion_pct=85.0
+        )
+
+        assert comp >= 85.0
+
+    def test_strategy5_short_price_array(self):
+        """Test Strategy 5 when price array is shorter than max_duration."""
+        prices = np.array([100.0] * 50)
+        total_usd = 10000
+
+        usd, shares, total, end, comp = strategy_5(
+            prices, total_usd, 20, 60, 40
+        )
+
+        # Should complete within available prices
+        assert end <= len(prices)

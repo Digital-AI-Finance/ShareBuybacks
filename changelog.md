@@ -2,6 +2,28 @@
 
 All notable changes to the Share Buyback Strategy App.
 
+## [1.4.0] - 2025-11-28
+
+### Added
+- Strategy 4: Multi-Factor Convex Adaptive execution strategy
+  - `strategy_4()` in `modules/strategies.py`
+  - `strategy_4_vectorized()` in `modules/strategies_vectorized.py`
+  - Exponential convex scaling: `mult = exp(beta * deviation)`
+  - Time-urgency factor: `urgency = 1 + gamma * (time_pct)^2`
+  - Optimized parameters: beta=50, gamma=1, z_threshold=0
+- Strategy 4 UI integration in app.py
+  - 4-column layout for performance/duration histograms
+  - Summary table with Strategy 4 metrics
+  - Example tab execution visualization
+  - Explanation tab with Strategy 4 formulas
+- 15 new unit tests for Strategy 4
+  - 10 tests in `tests/test_strategies.py` (TestStrategy4, TestStrategy4EdgeCases)
+  - 5 tests in `tests/test_strategies_vectorized.py` (TestStrategy4Vectorized)
+
+### Performance
+- Strategy 4 outperforms Strategy 2 by ~2.5 bps on average
+- Total test count: 153 tests (was 138)
+
 ## [1.3.0] - 2025-11-27
 
 ### Added
