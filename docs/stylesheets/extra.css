@@ -1,0 +1,62 @@
+/* Custom styles for Share Buyback Strategy docs */
+
+:root {
+  --md-primary-fg-color: #3f51b5;
+  --md-accent-fg-color: #2196f3;
+}
+
+/* Strategy cards */
+.strategy-card {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+  background: var(--md-code-bg-color);
+}
+
+/* Formula highlighting */
+.formula-box {
+  background: var(--md-code-bg-color);
+  border-left: 4px solid var(--md-accent-fg-color);
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+/* Performance metrics */
+.metric {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--md-accent-fg-color);
+}
+
+.metric-label {
+  font-size: 0.9rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Chart containers */
+.chart-container {
+  width: 100%;
+  height: 500px;
+  margin: 1rem 0;
+}
+
+/* Badge styling */
+.badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  margin-right: 0.5rem;
+}
+
+.badge-performance {
+  background: #4caf50;
+  color: white;
+}
+
+.badge-risk {
+  background: #ff9800;
+  color: white;
+}

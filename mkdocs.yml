@@ -1,0 +1,80 @@
+site_name: Share Buyback Strategy Simulator
+site_url: https://digital-ai-finance.github.io/ShareBuybacks/
+site_description: Monte Carlo simulation of adaptive share buyback execution strategies
+site_author: Digital AI Finance
+
+repo_name: Digital-AI-Finance/ShareBuybacks
+repo_url: https://github.com/Digital-AI-Finance/ShareBuybacks
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocs-jupyter:
+      include_source: true
+
+markdown_extensions:
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - admonition
+  - tables
+  - attr_list
+  - md_in_html
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Strategies:
+    - Overview: strategies/index.md
+    - Strategy 1 - Uniform: strategies/strategy-1-uniform.md
+    - Strategy 2 - Adaptive: strategies/strategy-2-adaptive.md
+    - Strategy 3 - Discount: strategies/strategy-3-discount.md
+    - Strategy 4 - Convex: strategies/strategy-4-convex.md
+    - Strategy 5 - Flexible: strategies/strategy-5-flexible.md
+  - Demo:
+    - App Screenshots: demo/index.md
+    - Interactive Charts: demo/charts.md
+  - API Reference: api/index.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Digital-AI-Finance/ShareBuybacks
