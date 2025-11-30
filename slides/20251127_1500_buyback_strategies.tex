@@ -1,0 +1,307 @@
+\documentclass[8pt]{beamer}
+\usetheme{Madrid}
+\usecolortheme{default}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+
+% Define colors for critique slides
+\definecolor{critiquered}{RGB}{180,0,0}
+\definecolor{improvementgreen}{RGB}{0,120,0}
+
+\title{Fixed-Notional Share Buyback Strategies}
+\subtitle{Mathematical Analysis and Critical Review}
+\author{Strategy Analysis}
+\date{November 2025}
+
+\begin{document}
+
+\begin{frame}
+\titlepage
+\end{frame}
+
+%% SLIDE 1: Problem Statement
+\begin{frame}{Problem Statement: Fixed-Notional Share Buyback}
+
+\textbf{Objective:} Execute a fixed USD amount over a trading period while minimizing execution cost.
+
+\vspace{0.3cm}
+\textbf{Price Model:} Geometric Brownian Motion (GBM)
+\[
+dS_t = \mu S_t \, dt + \sigma S_t \, dW_t
+\]
+
+\vspace{0.3cm}
+\textbf{Key Parameters:}
+\begin{itemize}
+    \item Total USD: \$1 billion
+    \item Target Duration: 100 days (flexible: 75--125)
+    \item Volatility ($\sigma$): 25\% annualized
+    \item Drift ($\mu$): 0\% (baseline)
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Performance Metric:}
+\[
+\text{Performance (bps)} = -\frac{\text{VWAP} - \text{Benchmark}}{\text{Benchmark}} \times 10000
+\]
+
+Positive = outperformance (bought cheaper than benchmark)
+
+\end{frame}
+
+%% SLIDE 2: Strategy 1 - Uniform
+\begin{frame}{Strategy 1: Uniform Execution (Dollar-Cost Averaging)}
+
+\textbf{Algorithm:} Execute $\frac{\text{Total USD}}{\text{Target Duration}}$ each day for exactly \texttt{target\_duration} days.
+
+\vspace{0.3cm}
+\textbf{Mathematical Properties:}
+\begin{itemize}
+    \item Daily execution: $\text{USD}_t = \frac{\text{Total}}{\text{T}}$ (constant)
+    \item Shares acquired: $\text{Shares}_t = \frac{\text{USD}_t}{P_t}$
+    \item Total shares: $\sum_t \frac{\text{USD}_t}{P_t} = \text{USD} \cdot \sum_t \frac{1}{P_t}$
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Key Result:}
+\[
+\text{VWAP} = \frac{\text{Total USD}}{\sum_t \text{Shares}_t} = \frac{T}{\sum_t \frac{1}{P_t}} = \text{Harmonic Mean}(P_1, \ldots, P_T)
+\]
+
+\[
+\text{Benchmark} = \frac{1}{T}\sum_t P_t = \text{Arithmetic Mean}(P_1, \ldots, P_T)
+\]
+
+\vspace{0.2cm}
+\textbf{Fundamental Inequality:} $\text{H.M.} \leq \text{A.M.}$ (always)
+
+$\Rightarrow$ \textbf{Strategy 1 has built-in positive expected performance!}
+
+\end{frame}
+
+%% SLIDE 3: Strategy 2 - Adaptive Logic
+\begin{frame}{Strategy 2: Adaptive Execution}
+
+\textbf{Algorithm:} Adjust daily execution based on price vs. benchmark.
+
+\vspace{0.2cm}
+\textbf{Three Phases:}
+
+\begin{enumerate}
+    \item \textbf{Initial Period (days 0--9):} Execute \texttt{base\_daily} (constant)
+
+    \item \textbf{Favorable (Price $<$ Benchmark):}
+    \begin{itemize}
+        \item Past \texttt{min\_duration}: Execute up to $5\times$ base (finish ASAP)
+        \item Before \texttt{min\_duration}: Speed up to finish by min\_duration
+    \end{itemize}
+
+    \item \textbf{Unfavorable (Price $\geq$ Benchmark):}
+    \begin{itemize}
+        \item Slow down to finish by \texttt{max\_duration}
+        \item Extra-slow mode: If remaining $< 5\times$ base AND days\_to\_max $> 5$, use $0.1\times$ base
+    \end{itemize}
+\end{enumerate}
+
+\vspace{0.3cm}
+\textbf{Benchmark Definition:}
+\[
+B(t) = \frac{1}{t+1}\sum_{i=0}^{t} P_i \quad \text{(Expanding Window Mean)}
+\]
+
+\end{frame}
+
+%% SLIDE 4: Decision Flowchart
+\begin{frame}{Strategy 2: Decision Flowchart}
+
+\begin{center}
+\includegraphics[height=0.78\textheight]{charts/decision_flowchart/decision_flowchart.pdf}
+\end{center}
+
+\end{frame}
+
+%% SLIDE 5: Strategy 3 - Discounted
+\begin{frame}{Strategy 3: Discounted Benchmark}
+
+\textbf{Modification:} Same as Strategy 2, but compare price to discounted benchmark:
+\[
+B'(t) = B(t) \times \left(1 - \frac{\text{discount\_bps}}{10000}\right)
+\]
+
+\vspace{0.3cm}
+\textbf{Example:} 100 bps discount $\Rightarrow$ compare price to 99\% of benchmark
+
+\vspace{0.3cm}
+\textbf{Effect:}
+\begin{itemize}
+    \item Price appears MORE favorable relative to $B'(t)$
+    \item ``Favorable'' path triggered more often
+    \item Average execution duration decreases
+    \item Strategy becomes more aggressive
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Implementation Note:} Final performance also calculated against discounted benchmark (verified in code).
+
+\end{frame}
+
+%% SLIDE 6: CRITIQUE - Benchmark Inconsistency
+\begin{frame}{{\color{critiquered}CRITIQUE:} Benchmark Period Inconsistency}
+
+\textbf{Problem:} Decision benchmark $\neq$ Performance benchmark
+
+\vspace{0.3cm}
+\begin{tabular}{ll}
+\toprule
+\textbf{Decision Benchmark} & Expanding mean at day $t$: $\frac{1}{t+1}\sum_{i=0}^{t} P_i$ \\
+\midrule
+\textbf{Performance Benchmark} & Mean over \textit{actual} execution period \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.3cm}
+\textbf{The Issue:}
+\begin{itemize}
+    \item If strategy finishes at day 75: Benchmark = $\frac{1}{75}\sum_{i=0}^{74} P_i$
+    \item If strategy finishes at day 125: Benchmark = $\frac{1}{125}\sum_{i=0}^{124} P_i$
+    \item These are \textbf{different benchmarks} for the same underlying path!
+\end{itemize}
+
+\vspace{0.3cm}
+\textbf{Self-Fulfilling Prophecy:}
+\begin{itemize}
+    \item When price $<$ benchmark, strategy finishes early
+    \item Early finish $\Rightarrow$ benchmark calculated over fewer (favorable) days
+    \item Artificially inflates apparent performance
+\end{itemize}
+
+\end{frame}
+
+%% SLIDE 7: CRITIQUE - Backward-Looking Benchmark
+\begin{frame}{{\color{critiquered}CRITIQUE:} Backward-Looking Benchmark}
+
+\begin{center}
+\includegraphics[width=0.9\textwidth]{charts/benchmark_comparison/benchmark_comparison.pdf}
+\end{center}
+
+\textbf{Problem:} Expanding mean LAGS price in trending markets
+\begin{itemize}
+    \item \textbf{Uptrend:} Price $>$ Benchmark continuously $\Rightarrow$ delays execution
+    \item \textbf{Downtrend:} Price $<$ Benchmark $\Rightarrow$ accelerates into falling prices
+\end{itemize}
+
+\end{frame}
+
+%% SLIDE 8: CRITIQUE - Implementation Issues
+\begin{frame}{{\color{critiquered}CRITIQUE:} Implementation Issues}
+
+\begin{enumerate}
+    \item \textbf{Arbitrary Multipliers:}
+    \begin{itemize}
+        \item $5\times$ speedup has no theoretical justification
+        \item $0.1\times$ slowdown (``extra-slow'') lacks economic basis
+        \item Should be derived from market impact models
+    \end{itemize}
+
+    \vspace{0.2cm}
+    \item \textbf{Binary Decision Logic:}
+    \begin{itemize}
+        \item Sharp threshold at Price $=$ Benchmark
+        \item Creates discontinuous execution behavior
+        \item Small price changes cause large execution swings
+    \end{itemize}
+
+    \vspace{0.2cm}
+    \item \textbf{No Transaction Costs:}
+    \begin{itemize}
+        \item Assumes zero market impact
+        \item $5\times$ acceleration unrealistic for large buybacks
+        \item Real-world: execution speed affects price
+    \end{itemize}
+
+    \vspace{0.2cm}
+    \item \textbf{No Drift Consideration:}
+    \begin{itemize}
+        \item Strategy ignores expected price trend
+        \item In positive drift markets, delay is costly
+    \end{itemize}
+\end{enumerate}
+
+\end{frame}
+
+%% SLIDE 9: Suggested Improvements
+\begin{frame}{{\color{improvementgreen}Suggested Improvements}}
+
+\begin{enumerate}
+    \item \textbf{Fixed Benchmark Period:}
+    \begin{itemize}
+        \item Always use \texttt{target\_duration} days for benchmark
+        \item Eliminates self-fulfilling performance measurement
+    \end{itemize}
+
+    \vspace{0.2cm}
+    \item \textbf{Rolling Window Benchmark:}
+    \begin{itemize}
+        \item Replace expanding mean with 20-day rolling mean
+        \item More responsive to recent price movements
+        \item Reduces lag in trending markets
+    \end{itemize}
+
+    \vspace{0.2cm}
+    \item \textbf{Smooth Transition Function:}
+    \begin{itemize}
+        \item Replace binary threshold with sigmoid function
+        \item Example: $\text{multiplier} = f\left(\frac{P_t - B_t}{B_t}\right)$
+    \end{itemize}
+
+    \vspace{0.2cm}
+    \item \textbf{Market Impact Model:}
+    \begin{itemize}
+        \item Execution amount should depend on liquidity
+        \item Almgren-Chriss framework for optimal execution
+    \end{itemize}
+\end{enumerate}
+
+\end{frame}
+
+%% SLIDE 10: Key Takeaways
+\begin{frame}{Key Takeaways}
+
+\begin{enumerate}
+    \item \textbf{Strategy 1 (Uniform):}
+    \begin{itemize}
+        \item Simple and mathematically sound
+        \item VWAP = Harmonic Mean $\leq$ Arithmetic Mean = Benchmark
+        \item Built-in positive expected performance (dollar-cost averaging)
+    \end{itemize}
+
+    \vspace{0.3cm}
+    \item \textbf{Strategy 2/3 (Adaptive):}
+    \begin{itemize}
+        \item Attempts ``buy low'' logic
+        \item Critical flaw: variable benchmark period
+        \item Backward-looking benchmark creates perverse incentives
+    \end{itemize}
+
+    \vspace{0.3cm}
+    \item \textbf{Main Issue:}
+    \begin{itemize}
+        \item Variable benchmark period creates inconsistent performance measurement
+        \item Simulation results may be misleading
+    \end{itemize}
+
+    \vspace{0.3cm}
+    \item \textbf{Recommendation:}
+    \begin{itemize}
+        \item Fix benchmark definition before trusting simulation results
+        \item Consider rolling window and smooth transition functions
+    \end{itemize}
+\end{enumerate}
+
+\end{frame}
+
+\end{document}
